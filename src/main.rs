@@ -1,5 +1,9 @@
 #![allow(warnings)]
-use reqwest::{blocking::Client, header::CONTENT_TYPE};
+use reqwest::{
+    blocking::{Client, Response},
+    header::CONTENT_TYPE,
+    Body, ClientBuilder,
+};
 use std::{
     error::Error,
     io::{self, Write},
@@ -56,32 +60,61 @@ pub struct Args {
 
     #[structopt(short = "k", long, help = "Use JWT token file")]
     token_file: Option<String>,
+
+    #[structopt(short = "l", help = "Log into file")]
+    log_file: Option<String>,
 }
 
 type Token = String;
 
 const RESTAFF_API_LOGIN: &str = "/api/user/login";
 const RESTAFF_API_CLAIM: &str = "/api/user/claim-daily";
+const RESTAFF_API_LOGOUT: &str = "/api/user/logout";
 const RESTAFF_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0";
 
-fn restaff_login(api_server: &str, username: &str, password: &str) -> anyhow::Result<Token> {
+fn api_post<B>(url: &str, payload: Option<B>, auth_token: Option<&str>) -> anyhow::Result<String>
+where
+    reqwest::blocking::Body: From<B>,
+{
     let client = Client::builder().user_agent(RESTAFF_USER_AGENT).build()?;
 
-    let body = format!(
+    let mut request = client
+        .post(url)
+        .header("appid", "c03714075869519a54ba70e31d6751c3")
+        .header(CONTENT_TYPE, "application/json");
+
+    if let Some(payload) = payload {
+        request = request.body(payload);
+    }
+
+    if let Some(token) = auth_token {
+        request = request.bearer_auth(token);
+    }
+
+    Ok(request.send()?.text()?)
+}
+
+fn get_response_id(response: &str) -> anyhow::Result<i64> {
+    let id_response = serde_json::from_str::<serde_json::Value>(response)?
+        .get("id")
+        .and_then(|id| id.as_i64())
+        .ok_or_else(|| "Invalid id value from response".to_error())?;
+
+    Ok(id_response)
+}
+
+fn restaff_login(api_server: &str, username: &str, password: &str) -> anyhow::Result<Token> {
+    let payload = format!(
         r#"{{"UserName":"{}","PassWord":"","Password":"{}","pushToken":"","platform":"Web","deviceId":"Windows-Firefox-88.0"}}"#,
         username, password
     );
 
-    let request = client
-        .post(format!("{}{}", api_server, RESTAFF_API_LOGIN))
-        .header("appid", "c03714075869519a54ba70e31d6751c3")
-        .header(CONTENT_TYPE, "application/json")
-        .body(body);
+    let url = format!("{}{}", api_server, RESTAFF_API_LOGIN);
 
-    let response = request.send()?;
-    let response_string = response.text()?;
-    let json = serde_json::from_str::<serde_json::Value>(&response_string)?;
+    let response = api_post(&url, Some(payload.clone()), None)?;
+
+    let json = serde_json::from_str::<serde_json::Value>(&response)?;
 
     let code = json
         .get("code")
@@ -101,24 +134,29 @@ fn restaff_login(api_server: &str, username: &str, password: &str) -> anyhow::Re
     Ok(token.to_string())
 }
 
-fn restaff_claim_points(api_server: &str, token: &str, claim_type: u8) -> anyhow::Result<i64> {
-    let client = Client::new();
+fn restaff_claim_points(api_server: &str, auth_token: &str, claim_type: u8) -> anyhow::Result<i64> {
+    let payload = claim_type.to_string();
 
-    let response = client
-        .post(format!("{}{}", api_server, RESTAFF_API_CLAIM))
-        .header("appid", "c03714075869519a54ba70e31d6751c3")
-        .header(CONTENT_TYPE, "application/json")
-        .body(claim_type.to_string())
-        .bearer_auth(token)
-        .send()?
-        .text()?;
+    let url = format!("{}{}", api_server, RESTAFF_API_CLAIM);
 
-    let id_response = serde_json::from_str::<serde_json::Value>(&response)?
-        .get("id")
-        .and_then(|id| id.as_i64())
-        .ok_or_else(|| "Invalid id value from response".to_error())?;
+    let response = api_post(&url, Some(payload), Some(auth_token))?;
 
-    Ok(id_response)
+    let result = get_response_id(&response);
+
+    result
+}
+
+fn restaff_logout(api_server: &str, token: &str) -> anyhow::Result<i64> {
+    let url = format!("{}{}", api_server, RESTAFF_API_LOGOUT);
+
+    let response = api_post(&url, Some(""), Some(token))?;
+
+    let result = serde_json::from_str::<serde_json::Value>(&response)?
+        .get("code")
+        .and_then(|code| code.as_i64())
+        .ok_or_else(|| "Invalid code value from response".to_error())?;
+
+    Ok(result)
 }
 
 fn split_once<'a>(src: &'a str, pat: &str) -> Option<(&'a str, &'a str)> {
@@ -228,6 +266,17 @@ fn main() {
     match restaff_claim_points(api_server.as_str(), token.as_str(), claim_type) {
         Ok(id) if id >= 0 => println!("Points claimed successfully."),
         Ok(id) => println!("Points claimed failed. Returned id: {}", id),
+        Err(err) => {
+            if is_using_input_token {
+                eprintln!("Error: Used user input token and failed.");
+            }
+            eprintln!("Error: {}", err);
+        }
+    }
+
+    match restaff_logout(api_server.as_str(), token.as_str()) {
+        Ok(id) if id >= 0 => println!("Logout successfully."),
+        Ok(id) => println!("Logout failed. Returned id: {}", id),
         Err(err) => {
             if is_using_input_token {
                 eprintln!("Error: Used user input token and failed.");
