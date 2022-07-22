@@ -8,7 +8,7 @@ Build instructions:
 
 Suggestions:
   - Create a new task to run this program daily.
-  - Password file can store only a single hashed base64 or with username with format: `username:password`
+  - Password file can store only a single hashed base64 or with username with format: `username:password`. Since your password is encrypted with base64, **USE AT YOUR OWN RISK**
   - Note that password has stored in base64 algorithm, so it's easy to decode. Be careful.
   - If only `-u/--username` option specified, a prompt to input password with be displayed.
 
