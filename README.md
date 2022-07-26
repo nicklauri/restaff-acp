@@ -11,6 +11,8 @@ Build instructions:
   4. Typing `cargo run --release -- -h` to get help. The executable file is at `./target/release`
   5. Optional: create a crontab (GNU/Linux) or task in task scheduler (Windows) to run daily.
 
+OR: just download the binary at release section!
+
 Suggestions:
   - Create a new task to run this program daily.
   - Password file can store only a single hashed base64 or with username with format: `username:password`. Since your password is encrypted with base64, **USE AT YOUR OWN RISK**
